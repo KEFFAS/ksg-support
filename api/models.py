@@ -1,35 +1,40 @@
-from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, DateTime, Text
-from sqlalchemy.sql import func
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, Text
+from sqlalchemy.orm import relationship
+from datetime import datetime
+
 from db import Base
+
 
 class User(Base):
     __tablename__ = "users"
-    id = Column(Integer, primary_key=True)
-    name = Column(String, nullable=False)
-    email = Column(String, unique=True, nullable=False, index=True)
-    is_admin = Column(Boolean, default=False)
 
-class Session(Base):
-    __tablename__ = "sessions"
-    id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
-    title = Column(String, nullable=True)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(255), nullable=True)
+    email = Column(String(255), unique=True, index=True, nullable=False)
+    is_admin = Column(Boolean, default=False, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
-class Message(Base):
-    __tablename__ = "messages"
-    id = Column(Integer, primary_key=True)
-    session_id = Column(Integer, ForeignKey("sessions.id"), nullable=False, index=True)
-    role = Column(String, nullable=False)  # "user" or "assistant"
-    content = Column(Text, nullable=False)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 class Document(Base):
     __tablename__ = "documents"
-    id = Column(Integer, primary_key=True)
-    doc_uid = Column(String, unique=True, nullable=False, index=True)   # stable ID for vectors
-    filename = Column(String, nullable=False)
-    local_path = Column(String, nullable=True)   # for MVP local storage
-    storage_url = Column(String, nullable=True)  # for future S3/R2
-    status = Column(String, default="uploaded")  # uploaded/indexing/indexed/failed
-    uploaded_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    id = Column(Integer, primary_key=True, index=True)
+    uid = Column(String(64), unique=True, index=True, nullable=False)
+    filename = Column(String(512), nullable=False)
+    storage_url = Column(String(2048), nullable=True)  # you made this nullable
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    chunks = relationship("Chunk", back_populates="document", cascade="all, delete-orphan")
+
+
+class Chunk(Base):
+    __tablename__ = "chunks"
+
+    id = Column(Integer, primary_key=True, index=True)
+    document_id = Column(Integer, ForeignKey("documents.id"), nullable=False)
+    chunk_index = Column(Integer, nullable=False)
+    content = Column(Text, nullable=False)
+    page = Column(Integer, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    document = relationship("Document", back_populates="chunks")
