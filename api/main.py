@@ -12,84 +12,68 @@ from vectorstore import index_pdf, query_index
 
 app = FastAPI(title="KSG Support API")
 
-# -----------------------------
-# ✅ CORS (FIXES YOUR ERROR)
-# -----------------------------
+# ✅ CORS (fixes browser fetch failures)
+# NOTE: we include localhost + allow any vercel preview URL using regex
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:3000",
         "http://127.0.0.1:3000",
-        "https://ksg-api.onrender.com",
-        # later add: https://your-vercel-app.vercel.app
     ],
+    allow_origin_regex=r"^https:\/\/.*\.vercel\.app$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# -----------------------------
-# Health
-# -----------------------------
 @app.get("/health")
 def health():
     return {"ok": True}
 
-# -----------------------------
-# Auth
-# -----------------------------
 @app.post("/auth/login")
 def login(payload: LoginRequest, db: Session = Depends(get_db)):
-    email = payload.email.lower()
+    email = payload.email.strip().lower()
+    name = (payload.name or "").strip().lower() or "user"
 
     user = db.query(User).filter(User.email == email).first()
     if not user:
-        user = User(
-            name=payload.name.lower(),
-            email=email,
-            is_admin=True if email.endswith("@gmail.com") else False,
-        )
+        # First user becomes admin (simple bootstrap)
+        is_admin = db.query(User).count() == 0
+        user = User(name=name, email=email, is_admin=is_admin)
         db.add(user)
         db.commit()
         db.refresh(user)
 
     token = make_token(user.id, user.is_admin)
-
     return {
         "token": token,
-        "user": {
-            "id": user.id,
-            "name": user.name,
-            "email": user.email,
-            "is_admin": user.is_admin,
-        },
+        "user": {"id": user.id, "name": user.name, "email": user.email, "is_admin": user.is_admin},
     }
 
-# -----------------------------
-# Sessions
-# -----------------------------
 @app.post("/sessions")
 def create_session(
-    title: dict,
+    payload: dict,
     db: Session = Depends(get_db),
     user=Depends(verify_token),
 ):
-    s = ChatSession(user_id=user["sub"], title=title.get("title"))
+    title = (payload.get("title") or "New session").strip()
+    s = ChatSession(user_id=int(user["sub"]), title=title)
     db.add(s)
     db.commit()
     db.refresh(s)
     return {"id": s.id, "title": s.title}
 
-# -----------------------------
-# Chat
-# -----------------------------
 @app.post("/chat")
 def chat(
     payload: ChatRequest,
     db: Session = Depends(get_db),
     user=Depends(verify_token),
 ):
-    session = db.query(ChatSession).filter(ChatSession.id == payload.session_id).first()
+    session = (
+        db.query(ChatSession)
+        .filter(ChatSession.id == payload.session_id, ChatSession.user_id == int(user["sub"]))
+        .first()
+    )
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
@@ -101,14 +85,9 @@ def chat(
     db.add(Message(session_id=session.id, role="assistant", content=answer))
     db.commit()
 
-    return {
-        "answer": answer,
-        "citations": citations,
-    }
+    return {"answer": answer, "citations": citations}
 
-# -----------------------------
-# Admin: Upload + Index PDF
-# -----------------------------
+
 UPLOAD_DIR = "uploaded_pdfs"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
@@ -118,20 +97,22 @@ def admin_upload(
     db: Session = Depends(get_db),
     user=Depends(verify_token),
 ):
-    if not user["adm"]:
+    if not user.get("adm"):
         raise HTTPException(status_code=403, detail="Admin only")
 
     doc_uid = str(uuid.uuid4())
-    path = os.path.join(UPLOAD_DIR, f"{doc_uid}__{file.filename}")
+    safe_name = file.filename.replace("/", "_").replace("\\", "_")
+    path = os.path.join(UPLOAD_DIR, f"{doc_uid}__{safe_name}")
 
     with open(path, "wb") as f:
         f.write(file.file.read())
 
     doc = Document(
         doc_uid=doc_uid,
-        filename=file.filename,
+        filename=safe_name,
         local_path=path,
         status="indexing",
+        storage_url=None,  # nullable in your DB now
     )
     db.add(doc)
     db.commit()
@@ -142,23 +123,15 @@ def admin_upload(
     doc.status = "ready"
     db.commit()
 
-    return {
-        "ok": True,
-        "document_id": doc.id,
-        "doc_uid": doc_uid,
-        "chunks_indexed": chunks,
-    }
+    return {"ok": True, "document_id": doc.id, "doc_uid": doc_uid, "chunks_indexed": chunks}
 
-# -----------------------------
-# Admin: Reindex
-# -----------------------------
 @app.post("/admin/documents/{doc_uid}/reindex")
 def admin_reindex(
     doc_uid: str,
     db: Session = Depends(get_db),
     user=Depends(verify_token),
 ):
-    if not user["adm"]:
+    if not user.get("adm"):
         raise HTTPException(status_code=403, detail="Admin only")
 
     doc = db.query(Document).filter(Document.doc_uid == doc_uid).first()
@@ -169,8 +142,4 @@ def admin_reindex(
     doc.status = "ready"
     db.commit()
 
-    return {
-        "ok": True,
-        "doc_uid": doc_uid,
-        "chunks_indexed": chunks,
-    }
+    return {"ok": True, "doc_uid": doc_uid, "chunks_indexed": chunks}
