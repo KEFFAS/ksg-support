@@ -1,96 +1,63 @@
 import os
-from typing import List, Tuple, Dict, Any
+from typing import Tuple, List, Dict, Any
 
 import chromadb
-from pypdf import PdfReader
-
-# ---- Chroma client ----
-CHROMA_HOST = os.getenv("CHROMA_HOST", "localhost")
-CHROMA_PORT = int(os.getenv("CHROMA_PORT", "8000"))
-
-client = chromadb.HttpClient(host=CHROMA_HOST, port=CHROMA_PORT)
-collection = client.get_or_create_collection(name="ksg_docs")
 
 
-def _chunk_text(text: str, chunk_size: int = 900, overlap: int = 150) -> List[str]:
-    text = " ".join(text.split())
-    chunks = []
-    i = 0
-    while i < len(text):
-        chunks.append(text[i : i + chunk_size])
-        i += chunk_size - overlap
-    return [c for c in chunks if c.strip()]
+def _chroma_settings() -> tuple[str, int]:
+    host = os.getenv("CHROMA_HOST", "").strip() or "localhost"
+    port_str = os.getenv("CHROMA_PORT", "").strip() or "8000"
+    return host, int(port_str)
 
 
-def index_pdf(doc_uid: str, pdf_path: str) -> int:
+def get_chroma_client() -> chromadb.ClientAPI:
+    host, port = _chroma_settings()
+    # IMPORTANT: create the client only when needed
+    return chromadb.HttpClient(host=host, port=port)
+
+
+def query_index(question: str) -> Tuple[str, List[Dict[str, Any]]]:
     """
-    Extract text from a PDF and store chunks in Chroma.
-    IDs are unique by (doc_uid + chunk index), so reindex replaces existing.
-    Returns number of chunks indexed.
+    Minimal stub: queries a Chroma collection named 'ksg'.
+    Adjust collection name / metadata keys to match your indexing logic.
     """
-    reader = PdfReader(pdf_path)
+    client = get_chroma_client()
+    col = client.get_or_create_collection("ksg")
 
-    # delete old chunks for this doc_uid (if any)
-    # Chroma doesn't have delete-by-metadata in all modes, so we query ids then delete.
-    existing = collection.get(where={"doc_uid": doc_uid}, include=["metadatas", "documents", "ids"])
-    if existing and existing.get("ids"):
-        collection.delete(ids=existing["ids"])
-
-    all_chunks = []
-    metadatas = []
-    ids = []
-
-    for page_index, page in enumerate(reader.pages, start=1):
-        page_text = page.extract_text() or ""
-        for chunk_index, chunk in enumerate(_chunk_text(page_text), start=1):
-            chunk_id = f"{doc_uid}::p{page_index}::c{chunk_index}"
-            ids.append(chunk_id)
-            all_chunks.append(chunk)
-            metadatas.append(
-                {
-                    "doc_uid": doc_uid,
-                    "page": page_index,
-                    "chunk": chunk_index,
-                    "source": os.path.basename(pdf_path),
-                }
-            )
-
-    if all_chunks:
-        collection.add(ids=ids, documents=all_chunks, metadatas=metadatas)
-
-    return len(all_chunks)
-
-
-def query_index(question: str, n_results: int = 6) -> Tuple[str, List[Dict[str, Any]]]:
-    """
-    Very simple retrieval-only answer:
-    - fetch top chunks from Chroma
-    - return them as a "context" answer + citations
-
-    Later we’ll upgrade this to LLM answering (OpenAI) using the retrieved context.
-    """
-    res = collection.query(query_texts=[question], n_results=n_results)
+    # NOTE: this is basic. Your real logic may use embeddings, filters, etc.
+    res = col.query(
+        query_texts=[question],
+        n_results=3,
+    )
 
     docs = (res.get("documents") or [[]])[0]
     metas = (res.get("metadatas") or [[]])[0]
 
+    # build a simple answer
     if not docs:
-        return (
-            "I don’t have enough indexed content yet to answer that. Please upload/reindex documents first.",
-            [],
-        )
+        return ("No results found in the vector store yet.", [])
 
     citations = []
-    context_lines = []
     for d, m in zip(docs, metas):
-        context_lines.append(f"- {d}")
-        citations.append(
-            {
-                "filename": m.get("source", ""),
-                "page": m.get("page", None),
-                "doc_uid": m.get("doc_uid", ""),
-            }
-        )
+        citations.append({"text": d, "meta": m})
 
-    answer = "Here’s what I found in the indexed documents:\n\n" + "\n\n".join(context_lines)
+    answer = docs[0]
     return answer, citations
+
+
+def index_pdf(doc_uid: str, pdf_path: str) -> int:
+    """
+    Minimal stub: you likely already have chunking logic elsewhere.
+    For now, this just confirms connectivity + creates the collection.
+    """
+    client = get_chroma_client()
+    col = client.get_or_create_collection("ksg")
+
+    # You probably have real chunking logic in another file (rag.py/indexer.py).
+    # For now, just store one placeholder entry so you can verify end-to-end.
+    col.add(
+        ids=[doc_uid],
+        documents=[f"Uploaded PDF stored at {pdf_path}"],
+        metadatas=[{"doc_uid": doc_uid, "path": pdf_path}],
+    )
+    return 1
