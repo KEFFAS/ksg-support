@@ -10,10 +10,13 @@ def _chroma_settings() -> tuple[str, int]:
     return host, int(port_str)
 
 
+
 def get_chroma_client() -> chromadb.ClientAPI:
     host, port = _chroma_settings()
-    # IMPORTANT: create the client only when needed
-    return chromadb.HttpClient(host=host, port=port)
+
+    ssl = os.getenv("CHROMA_SSL", "").strip().lower() in ("1", "true", "yes", "on")
+    # If you're using https:// on Render, use port 443 and ssl=True
+    return chromadb.HttpClient(host=host, port=port, ssl=ssl)
 
 
 def query_index(question: str) -> Tuple[str, List[Dict[str, Any]]]:
