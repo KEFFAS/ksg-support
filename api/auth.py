@@ -1,40 +1,37 @@
-# api/auth.py
 import os
 from datetime import datetime, timedelta, timezone
-from typing import Optional, Tuple, Dict, Any
+from typing import Optional, Dict, Any
 
 from fastapi import HTTPException, Query
 from jose import jwt, JWTError
 
-JWT_SECRET = os.getenv("JWT_SECRET", "change-me")  # set in Render env
-JWT_ALG = "HS256"
-JWT_EXP_MIN = int(os.getenv("JWT_EXP_MIN", "1440"))  # 24h default
+SECRET = os.getenv("JWT_SECRET", "change-me")
+ALG = "HS256"
+EXP_MIN = 60 * 24  # 24 hours
 
 
-def _is_admin_email(email: str) -> bool:
-    # Simple rule for now. You can change later (e.g. ADMIN_EMAILS env).
-    return email.lower().endswith("@ksg.ac.ke")
-
-
-def make_token(name: Optional[str], email: str) -> Tuple[str, Dict[str, Any]]:
-    user = {
+def make_token(name: str, email: str, is_admin: bool = False) -> str:
+    now = datetime.now(timezone.utc)
+    payload = {
         "name": name or "",
         "email": email,
-        "is_admin": _is_admin_email(email),
+        "adm": bool(is_admin),
+        "iat": int(now.timestamp()),
+        "exp": now + timedelta(minutes=EXP_MIN),
     }
-
-    payload = {
-        "sub": email,
-        "adm": user["is_admin"],
-        "exp": datetime.now(timezone.utc) + timedelta(minutes=JWT_EXP_MIN),
-    }
-    token = jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALG)
-    return token, user
+    return jwt.encode(payload, SECRET, algorithm=ALG)
 
 
 def verify_token(token: str = Query(...)) -> Dict[str, Any]:
+    """
+    FastAPI dependency. Reads token from query param: ?token=...
+    """
     try:
-        data = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALG])
-        return {"email": data["sub"], "is_admin": bool(data.get("adm", False))}
+        data = jwt.decode(token, SECRET, algorithms=[ALG])
+        return {
+            "name": data.get("name", ""),
+            "email": data.get("email", ""),
+            "is_admin": bool(data.get("adm", False)),
+        }
     except JWTError:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
