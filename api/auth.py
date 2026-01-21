@@ -1,48 +1,40 @@
+# api/auth.py
 import os
-from datetime import datetime, timedelta
-from typing import Optional
+from datetime import datetime, timedelta, timezone
+from typing import Optional, Tuple, Dict, Any
 
-from fastapi import Depends, HTTPException, Query
-from fastapi.security import OAuth2PasswordBearer
+from fastapi import HTTPException, Query
 from jose import jwt, JWTError
 
-SECRET = os.getenv("JWT_SECRET", "change-me")
-ALG = "HS256"
-EXP_MIN = 60 * 24  # 24 hours
-
-# Allows Authorization: Bearer <token>
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login", auto_error=False)
+JWT_SECRET = os.getenv("JWT_SECRET", "change-me")  # set in Render env
+JWT_ALG = "HS256"
+JWT_EXP_MIN = int(os.getenv("JWT_EXP_MIN", "1440"))  # 24h default
 
 
-def make_token(user_id: int, is_admin: bool) -> str:
-    payload = {
-        "sub": str(user_id),
-        "adm": bool(is_admin),
-        "exp": datetime.utcnow() + timedelta(minutes=EXP_MIN),
+def _is_admin_email(email: str) -> bool:
+    # Simple rule for now. You can change later (e.g. ADMIN_EMAILS env).
+    return email.lower().endswith("@ksg.ac.ke")
+
+
+def make_token(name: Optional[str], email: str) -> Tuple[str, Dict[str, Any]]:
+    user = {
+        "name": name or "",
+        "email": email,
+        "is_admin": _is_admin_email(email),
     }
-    return jwt.encode(payload, SECRET, algorithm=ALG)
+
+    payload = {
+        "sub": email,
+        "adm": user["is_admin"],
+        "exp": datetime.now(timezone.utc) + timedelta(minutes=JWT_EXP_MIN),
+    }
+    token = jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALG)
+    return token, user
 
 
-def verify_token(
-    bearer_token: Optional[str] = Depends(oauth2_scheme),
-    token: Optional[str] = Query(default=None),
-):
-    """
-    Accepts token from:
-    1) Authorization: Bearer <token>
-    2) ?token=<token> (fallback)
-    """
-
-    raw_token = bearer_token or token
-
-    if not raw_token:
-        raise HTTPException(status_code=401, detail="Token required")
-
+def verify_token(token: str = Query(...)) -> Dict[str, Any]:
     try:
-        data = jwt.decode(raw_token, SECRET, algorithms=[ALG])
-        return {
-            "user_id": int(data["sub"]),
-            "is_admin": bool(data.get("adm", False)),
-        }
+        data = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALG])
+        return {"email": data["sub"], "is_admin": bool(data.get("adm", False))}
     except JWTError:
         raise HTTPException(status_code=401, detail="Invalid or expired token")

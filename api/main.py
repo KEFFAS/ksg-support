@@ -42,17 +42,17 @@ def health():
     return {"ok": True}
 
 
+
+
 @app.post("/auth/login")
-def login(payload: dict, db: Session = Depends(get_db)):
+def login(payload: dict):
     name = payload.get("name")
     email = payload.get("email")
-
     if not email:
         raise HTTPException(status_code=400, detail="Email required")
 
-    token, user = make_token(db, name=name, email=email)
+    token, user = make_token(name=name, email=email)
     return {"token": token, "user": user}
-
 
 @app.post("/chat")
 def chat(payload: dict, user=Depends(verify_token)):
